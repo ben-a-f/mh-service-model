@@ -1,9 +1,10 @@
 # This file trials two scaling methods and four clustering algorithms on the synthetic patient data.
 # Scaling: RobustScaler(), StandardScaler()
 # Clustering: DBSCAN, k-Means, Agglomerative (Hierarchical), Gaussian Mixture Model
-# The results are outputted in .csv format and inspected in a separate script, cluster_model_inspection.py
+# The results are outputted in .csv format and inspected in a separate script, Cluster Model Inspection.ipynb
 
 import pandas as pd
+import numpy as np
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.mixture import GaussianMixture
 from scipy.spatial.distance import pdist, squareform
@@ -11,7 +12,7 @@ from sklearn.preprocessing import RobustScaler, StandardScaler
 from sklearn.metrics import silhouette_score
 from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
 import matplotlib.pyplot as plt
-import numpy as np
+
 
 synthetic_patients = pd.read_csv("synthetic_patients.csv")
 synthetic_patients["EntryDate"] = pd.to_datetime(synthetic_patients["EntryDate"], format="%Y-%m-%d")
