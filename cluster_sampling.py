@@ -8,18 +8,17 @@ from sklearn.cluster import KMeans
 
 # Import data, format and scale.
 synthetic_patients = pd.read_csv("synthetic_patients.csv")
-synthetic_patients["EntryDate"] = pd.to_datetime(synthetic_patients["EntryDate"], format="%Y-%m-%d")
-synthetic_patients["EntryMonth"] = synthetic_patients["EntryDate"].dt.month
-transform_cols = ["Age", "LoS", "DailyContacts", "EntryMonth"]
+transform_cols = ["Age", "LoS", "DailyContacts"]
 scaler = RobustScaler()
 scaled_data = pd.DataFrame(scaler.fit_transform(synthetic_patients[transform_cols]))
 scaled_data.columns = transform_cols
 
 # Set k, cluster, and extract labels and centroids.
-k = 3
+k = 4
 km = KMeans(n_clusters=k)
 km.fit(scaled_data)
 
+# TODO: Assign covariance in the case of only 1 sample in cluster.
 
 # Generate total_n samples from the cluster model, using the model object kmeans.
 def cluster_samples(kmeans, data, total_n):

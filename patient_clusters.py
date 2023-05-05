@@ -16,12 +16,11 @@ import matplotlib.pyplot as plt
 
 synthetic_patients = pd.read_csv("synthetic_patients.csv")
 synthetic_patients["EntryDate"] = pd.to_datetime(synthetic_patients["EntryDate"], format="%Y-%m-%d")
-synthetic_patients["EntryMonth"] = synthetic_patients["EntryDate"].dt.month
 
 # Note: After some testing, the StandardScaler() is less effective than the RobustScaler().
 # The sse scores are comparable but the silhouette scores are worse, suggesting that the optimal number of clusters
 # with either method is similar, but that the clusters defined with StandardScaler() data are less distinct.
-transform_cols = ["Age", "LoS", "DailyContacts", "EntryMonth"]
+transform_cols = ["Age", "LoS", "DailyContacts"]
 scaler = RobustScaler()
 # scaler = StandardScaler()
 scaled_data = pd.DataFrame(scaler.fit_transform(synthetic_patients[transform_cols]))
@@ -42,7 +41,7 @@ def calculate_sse(labels, data):
 # DBSCAN
 # Visually inspect various choices of min_samples, n.
 # Defines the min number of samples in a neighbourhood to define a core point.
-n = 8
+n = 2
 # Create distance matrix.
 dist = pd.DataFrame(squareform(pdist(scaled_data)),
                     columns=scaled_data.index,
@@ -54,7 +53,10 @@ ax1.plot(nth_dist)
 
 # Apply algorithm for a range of parameters.
 min_samples = [2, 3, 4, 5, 6, 7, 8]
-eps = [0.95, 1.1, 1.3, 1.5, 1.6, 1.7, 1.7]
+# Robust eps values.
+eps = [1, 1.1, 1.2, 1.3, 1.3, 1.4, 1.5]
+# Standard eps values.
+# eps = [0.7, 0.7, 1, 1.05, 1.1, 1.3, 1.3]
 num_clusters = []
 silhouette_scores = []
 sse_scores = []
