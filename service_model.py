@@ -45,46 +45,81 @@ def truncated_mv_normal(mean, cov, lower_bounds=None):
 
 # Create the simulation environment
 env = simpy.Environment()
-# ward = simpy.Resource(env, capacity=20)
+ward1 = simpy.Resource(env, capacity=2)
+ward2 = simpy.Resource(env, capacity=3)
+ward1.name = "ward1"
+ward2.name = "ward2"
+wards = [ward1, ward2]
 
 
 # Define a patient.
 class Patient(object):
-    # Start the instantiate process every time an instance is created.
-    def __init__(self, env):
+    # Instantiate a patient and generate characteristics.
+    def __init__(self, env, id_num, resource_req, req_index):
         self.env = env
-        self.action = env.process(self.instantiate())
+        self.id = id_num
+        self.cluster = np.random.choice(range(len(global_props)), 1, p=global_props)[0]
+        self.patient_characteristics = truncated_mv_normal(global_centres[self.cluster],
+                                                           global_covs[self.cluster],
+                                                           global_scaled_bounds)
+        self.action = env.process(self.enter_service(env, resource_req, req_index))
 
-    # Instantiate a patient with synthetic data.
-    def instantiate(self):
-        while True:
-            cluster = np.random.choice(range(len(global_props)), 1, p=global_props)[0]
-            patient_characteristics = truncated_mv_normal(global_centres[cluster],
-                                                          global_covs[cluster],
-                                                          global_scaled_bounds)
-            # TODO: Identify appropriate resources.
-            # with ward.request() as req
-            #   yield req
-            #   yield env.timeout(los)
+    def enter_service(self, env, resource_req, req_index):
+        # TODO: Automate reading LoS from characteristics.
+        los = 5
+        patient_name = "P" + str(self.id)
+        print(f"{patient_name} occupied {wards[req_index].name} at time {env.now}")
+        yield env.timeout(los)
+        wards[req_index].release(resource_req)
+        print(f"{patient_name} released {wards[req_index].name} at time {env.now}")
 
-            # TODO: Allow for sequence of resources (i.e. move to next ward).
+        # TODO: Allow for sequence of resources (i.e. move to next ward).
 
 
 
-# Create the event process
-def daily_referrals(env):
+# Referral process creates new patients at each time step and assigns them to an available ward.
+def daily_referrals(env, resources):
+    id_start = 0
     while True:
         # TODO: Instantiate a random number patients using global entry rate.
-        num_instances = np.random.randint(1, 3)
-        for _ in range(num_instances):
-            Patient(env)
+        #       Execute the ward finding process below for each.
+        # num_instances = np.random.randint(1, 3)
+
+        # TODO: Instantiate patients first so the possible wards can be subset based on their attributes.
+        #       Then trigger the enter_service(), rather than triggering on instantiation.
+        # Find a free resource and send the patient there.
+        reqs = [ward.request() for ward in wards]
+        req_index = 0
+        # returns dictionary of triggered events.
+        result = yield simpy.AnyOf(env, reqs)
+        # Find the successful request
+        resourceList = list(result.keys())
+        resource = resourceList[0]
+
+        # Case 1: Multiple requests got filled, need to release all others
+        if len(resourceList) > 1:
+            for i in range(len(reqs)):
+                if reqs[i] != resource:
+                    wards[i].release(reqs[i])
+                else:
+                    req_index = i
+        # Case 2: Only one request was filled, need to cancel the others
+        else:
+            for i in range(len(reqs)):
+                if reqs[i] not in resourceList:
+                    reqs[i].cancel()
+                else:
+                    req_index = i
+
+        Patient(env, id_start, reqs[req_index], req_index)
+        id_start += 1
 
         # Wait for the next time step
-        yield env.timeout(1)  # Change the time step as needed
+        yield env.timeout(1)
 
 
 # Create an instance of the event process and start it
-env.process(daily_referrals(env))
+env.process(daily_referrals(env, wards))
 
 # Run the simulation
 env.run(until=10)  # Change the simulation duration as needed
