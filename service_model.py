@@ -1,10 +1,11 @@
-# This script contains the early WIP of the SimPy model that describes an inpatient mental health service.
+# This WIP script contains the SimPy model that describes an inpatient mental health service.
 
 import simpy
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import RobustScaler
 
+# TODO: Remove once testing is over or when testing MC version.
 np.random.seed(42)
 
 # Import data, format and scale.
@@ -36,13 +37,13 @@ global_entry_rate = 0.5
 # Min age to be permitted is 18.
 global_bounds = np.array([18, 0, 0])
 global_scaled_bounds = scaler.transform(global_bounds.reshape(1, -1))
-# Ward requirements: None, Age > 65+, LoS <7
+# Ward requirements: None, Age > 65+, LoS >120
 global_ward_reqs_low = [[0, 0, 0], # Ward 1
                         [65, 0, 0], # Ward 2
-                        [0, 0, 0]] # Ward 3
+                        [0, 112, 0]] # Ward 3
 global_ward_reqs_high = [[np.inf, np.inf, np.inf],
                          [np.inf, np.inf, np.inf],
-                         [np.inf, 14, np.inf]]
+                         [np.inf, np.inf, np.inf]]
 
 
 # Generate synthetic patient characteristics from a given mean and cov (which are based on a specific cluster).
@@ -66,11 +67,23 @@ ward2 = simpy.Resource(env, capacity=10)
 ward3 = simpy.Resource(env, capacity=5)
 ward1.name = "General Ward"
 ward2.name = "Senior Ward"
-ward3.name = "Short Stay"
-wards = [ward1, ward2, ward3]
+ward3.name = "Long Stay"
+# TODO: Set up the requirements to be named so there's no ambiguity in matching wards to their reqs.
+# This indirectly acts as a priority. We prioritise specialised wards here.
+wards = [ward3, ward2, ward1]
+# Reversing the requirements to match the priority in the above line.
+global_ward_reqs_low.reverse()
+global_ward_reqs_high.reverse()
+# Dicts to track occupancy and queues.
 occupancy = {ward1.name: [],
              ward2.name: [],
              ward3.name: []}
+queue = {ward1.name: [],
+         ward2.name: [],
+         ward3.name: []}
+queue_count = {ward1.name: 0,
+         ward2.name: 0,
+         ward3.name: 0}
 
 
 # Define a patient.
@@ -89,16 +102,53 @@ class Patient(object):
                                                                global_scaled_bounds)
         else:
             self.patient_characteristics = characteristics
+        self.action = env.process(self.choose_service(env))
 
-    # TODO: Remove req_index and print statements once testing is done.
-    def enter_service(self, env, resource_req, req_index, suitable_wards):
+    # Find possible services for this patient and accept first available space.
+    def choose_service(self, env):
+        suitable_wards = []
+        for i in range(len(global_ward_reqs_low)):
+            if np.all(np.greater(self.patient_characteristics, global_ward_reqs_low[i])) and np.all(
+                    np.less(self.patient_characteristics, global_ward_reqs_high[i])):
+                suitable_wards.append(wards[i])
+
+        # Find a free resource and send the patient there.
+        reqs = [ward.request() for ward in suitable_wards]
+        # Add each request to the queue count (note: this double counts for multiple possible wards).
+        for ward in suitable_wards:
+            queue_count[ward.name] += 1
+        req_index = 0
+        # Returns dictionary of triggered events.
+        result = yield simpy.AnyOf(env, reqs)
+        # Find the successful request.
+        resourceList = list(result.keys())
+        resource = resourceList[0]
+
+        # Case 1: Multiple requests got filled, need to release all others
+        if len(resourceList) > 1:
+            for i in range(len(reqs)):
+                if reqs[i] != resource:
+                    suitable_wards[i].release(reqs[i])
+                    queue_count[suitable_wards[i].name] -= 1
+                else:
+                    req_index = i
+        # Case 2: Only one request was filled, need to cancel the others
+        else:
+            for i in range(len(reqs)):
+                if reqs[i] not in resourceList:
+                    reqs[i].cancel()
+                    queue_count[suitable_wards[i].name] -= 1
+                else:
+                    req_index = i
+
+        # Send patient to the chosen ward.
+        env.process(self.enter_service(env, reqs[req_index], suitable_wards[req_index]))
+        queue_count[suitable_wards[req_index].name] -= 1
+
+    def enter_service(self, env, resource_req, selected_ward):
         los = self.patient_characteristics[0, 1]
-        patient_name = "P" + str(self.id)
-        # print(f"{patient_name} occupied {suitable_wards[req_index].name} at time {env.now}")
         yield env.timeout(los)
-        wards[req_index].release(resource_req)
-        # print(f"{patient_name} released {suitable_wards[req_index].name} at time {env.now}")
-
+        selected_ward.release(resource_req)
         # TODO: Allow for sequence of resources (i.e. move to next ward).
         #       Update: Have added option to instantiate with known characteristics.
         #       Follow-up stays can be instantiated as new patient with same ID.
@@ -113,50 +163,14 @@ def daily_referrals(env):
         num_referrals = np.random.poisson(global_entry_rate)
 
         for j in range(num_referrals):
-            # Instantiate patient and check for suitable wards based on their characteristics.
-            p = Patient(env, id_start)
-            suitable_wards = []
-            for i in range(len(global_ward_reqs_low)):
-                if np.any(np.less(p.patient_characteristics, global_ward_reqs_low[i])) or np.any(np.greater(p.patient_characteristics, global_ward_reqs_high[i])):
-                    continue
-                else:
-                    suitable_wards.append(wards[i])
-
-            # Find a free resource and send the patient there.
-            reqs = [ward.request() for ward in suitable_wards]
-            req_index = 0
-            # returns dictionary of triggered events.
-            # TODO: I think this line is causing the process to wait until one is fulfilled, instead of continuing on.
-            result = yield simpy.AnyOf(env, reqs)
-            # Find the successful request
-            resourceList = list(result.keys())
-            resource = resourceList[0]
-
-            # Case 1: Multiple requests got filled, need to release all others
-            if len(resourceList) > 1:
-                for i in range(len(reqs)):
-                    if reqs[i] != resource:
-                        wards[i].release(reqs[i])
-                    else:
-                        req_index = i
-            # Case 2: Only one request was filled, need to cancel the others
-            else:
-                for i in range(len(reqs)):
-                    if reqs[i] not in resourceList:
-                        reqs[i].cancel()
-                    else:
-                        req_index = i
-
-            # Send patient to ward.
-            env.process(p.enter_service(env, reqs[req_index], req_index, suitable_wards))
+            # Instantiate patient.
+            Patient(env, id_start)
             id_start += 1
 
         # Record occupancies.
-        print(env.now)
-        if env.now >= 20:
-            print("Stop!")
         for ward in wards:
             occupancy[ward.name].append((env.now, ward.count))
+            queue[ward.name].append((env.now, queue_count[ward.name]))
         # Wait for the next time step
         yield env.timeout(1)
 
@@ -167,6 +181,5 @@ env.process(daily_referrals(env))
 # Run the simulation
 env.run(until=100)
 
-# TODO: Extract occupancies over full duration.
-#       Export data.
-#       Export visualisations.
+# TODO: Visualise occupancies and queues.
+# TODO: Monte-carlo functionality: Export occupancies and queues, calculate ensemble results, add visualisations.

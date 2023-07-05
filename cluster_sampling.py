@@ -91,3 +91,5 @@ props, centres, covs = get_sample_parameters(km, scaled_data)
 target_cluster = np.random.choice(km.n_clusters, 1, p=props)[0]
 scaled_single = truncated_mv_normal(centres[target_cluster], covs[target_cluster], 1, scaled_bounds)
 synthetic_single = scaler.inverse_transform(scaled_single)
+
+# TODO: Add functionality to give additional weight to most recent n months by oversampling.
