@@ -1,13 +1,19 @@
 # This WIP script contains the SimPy model that describes an inpatient mental health service.
+# There is a "Set manual parameters." section that needs to be completed.
 
 import simpy
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import RobustScaler
+from get_model_parameters import get_cluster_parameters
+from get_model_parameters import get_referral_rate
+from get_model_parameters import truncated_mv_normal
 
-# TODO: Remove once testing is over or when testing MC version.
+# TODO: Remove once testing is over.
 np.random.seed(42)
 
+# TODO: Check if we need to remove NaNs from LoS column before/after scaling
+#       (but keep them in the raw data for occupancy func).
 # Import data, format and scale.
 synthetic_patients = pd.read_csv("synthetic_patients.csv")
 transform_cols = ["Age", "LoS", "DailyContacts"]
@@ -15,50 +21,9 @@ scaler = RobustScaler()
 scaled_data = pd.DataFrame(scaler.fit_transform(synthetic_patients[transform_cols]))
 scaled_data.columns = transform_cols
 
-# TODO: Replace with read-in parameters.
-# Set some initial parameters as global variables by hand for testing.
-# Cluster probabilities
-global_props = [0.874, 0.114, 0.012]
-# Age, LoS and DailyContacts means & cov matx for each cluster.
-global_centres = [[-0.02348025,  0.03872558,  0.09976081],
-                  [ 0.54347826, -0.08974359, 15.49924954],
-                  [ 0.2532418, -0.34412955,  4.16255464]]
-global_covs = [[[ 4.59758542e-01,  1.33754795e-01,  1.11567438e-01],
-                [ 1.33754795e-01,  4.87558287e-01, -4.43869321e-02],
-                [ 1.11567438e-01, -4.43869321e-02,  3.09340565e-01]],
-               [[ 1.82041588e-01,  5.18394649e-02,  3.16903395e-01],
-                [ 5.18394649e-02,  2.44773176e-01, -1.26607217e+00],
-                [ 3.16903395e-01, -1.26607217e+00,  4.85179220e+01]],
-               [[ 4.22166001e-01,  2.24155707e-01,  4.80202957e-02],
-                [ 2.24155707e-01,  5.04248788e-01, -9.56266408e-02],
-                [ 4.80202957e-02, -9.56266408e-02,  3.10893071e+00]]]
-# Patient referral rate
-global_entry_rate = 0.5
-# Min age to be permitted is 18.
-global_bounds = np.array([18, 0, 0])
-global_scaled_bounds = scaler.transform(global_bounds.reshape(1, -1))
-# Ward requirements: None, Age > 65+, LoS >120
-global_ward_reqs_low = [[0, 0, 0], # Ward 1
-                        [65, 0, 0], # Ward 2
-                        [0, 112, 0]] # Ward 3
-global_ward_reqs_high = [[np.inf, np.inf, np.inf],
-                         [np.inf, np.inf, np.inf],
-                         [np.inf, np.inf, np.inf]]
-
-
-# Generate synthetic patient characteristics from a given mean and cov (which are based on a specific cluster).
-# Age, LoS, DailyContacts
-def truncated_mv_normal(mean, cov, lower_bounds=None):
-    if lower_bounds is None:
-        lower_bounds = np.repeat(-np.inf, len(mean))
-
-    p = np.random.multivariate_normal(mean=mean, cov=cov)
-    if np.any(np.less(p, lower_bounds)):
-        p = truncated_mv_normal(mean, cov, lower_bounds)
-    p = scaler.inverse_transform(p.reshape(1, -1))
-    p[0, 0:2] = p[0, 0:2].round()
-    return p
-
+# Get model parameters
+global_props, global_centres, global_covs = get_cluster_parameters(scaled_data, 3)
+global_entry_rate = get_referral_rate(synthetic_patients["EntryDate"])
 
 # Create the simulation environment
 env = simpy.Environment()
@@ -68,12 +33,10 @@ ward3 = simpy.Resource(env, capacity=5)
 ward1.name = "General Ward"
 ward2.name = "Senior Ward"
 ward3.name = "Long Stay"
-# TODO: Set up the requirements to be named so there's no ambiguity in matching wards to their reqs.
-# This indirectly acts as a priority. We prioritise specialised wards here.
+# This vector indirectly acts as a priority.
 wards = [ward3, ward2, ward1]
-# Reversing the requirements to match the priority in the above line.
-global_ward_reqs_low.reverse()
-global_ward_reqs_high.reverse()
+
+# TODO: Instantiate occupancy with existing patients.
 # Dicts to track occupancy and queues.
 occupancy = {ward1.name: [],
              ward2.name: [],
@@ -82,9 +45,21 @@ queue = {ward1.name: [],
          ward2.name: [],
          ward3.name: []}
 queue_count = {ward1.name: 0,
-         ward2.name: 0,
-         ward3.name: 0}
+               ward2.name: 0,
+               ward3.name: 0}
 
+## Set manual parameters.
+# Minimum patient Age is set to be 18. LoS and DailyContacts are >=0.
+global_bounds = np.array([18, 0, 0])
+global_scaled_bounds = scaler.transform(global_bounds.reshape(1, -1))
+# Set ward specialisations manually: General Purpose, Age >65, and LoS >56.
+global_ward_reqs_low = {ward1.name: [0, 0, 0],
+                        ward2.name: [65, 0, 0],
+                        ward3.name: [0, 56, 0]}
+global_ward_reqs_high = {ward1.name: [np.inf, np.inf, np.inf],
+                         ward2.name: [np.inf, np.inf, np.inf],
+                         ward3.name: [np.inf, np.inf, np.inf]}
+##
 
 # Define a patient.
 class Patient(object):
@@ -97,7 +72,8 @@ class Patient(object):
         else:
             self.cluster = cluster
         if characteristics is None:
-            self.patient_characteristics = truncated_mv_normal(global_centres[self.cluster],
+            self.patient_characteristics = truncated_mv_normal(scaler,
+                                                               global_centres[self.cluster],
                                                                global_covs[self.cluster],
                                                                global_scaled_bounds)
         else:
@@ -107,10 +83,10 @@ class Patient(object):
     # Find possible services for this patient and accept first available space.
     def choose_service(self, env):
         suitable_wards = []
-        for i in range(len(global_ward_reqs_low)):
-            if np.all(np.greater(self.patient_characteristics, global_ward_reqs_low[i])) and np.all(
-                    np.less(self.patient_characteristics, global_ward_reqs_high[i])):
-                suitable_wards.append(wards[i])
+        for ward in wards:
+            if np.all(np.greater_equal(self.patient_characteristics, global_ward_reqs_low[ward.name])) and np.all(
+                    np.less_equal(self.patient_characteristics, global_ward_reqs_high[ward.name])):
+                suitable_wards.append(ward)
 
         # Find a free resource and send the patient there.
         reqs = [ward.request() for ward in suitable_wards]
@@ -153,8 +129,7 @@ class Patient(object):
         #       Update: Have added option to instantiate with known characteristics.
         #       Follow-up stays can be instantiated as new patient with same ID.
 
-
-
+# TODO: Add a function to populate wards with existing patients, and generate a LoS for them when sim starts.
 # Referral process creates new patients at each time step and assigns them to an available ward.
 def daily_referrals(env):
     id_start = 0

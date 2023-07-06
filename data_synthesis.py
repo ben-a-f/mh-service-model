@@ -1,9 +1,12 @@
 # This script generates synthetic patient data.
-# It is still a work in progress and the chosen parameters are largely arbitrary at present.
+# It is still a work in progress and the chosen parameters are largely hardcoded and arbitrary at present.
 
 import numpy as np
 import pandas as pd
 from scipy.stats import beta, norm, lognorm
+
+# TODO: Remove once testing is over.
+np.random.seed(42)
 
 
 # Generate correlated random samples from a beta and two lognormal distributions.
@@ -70,7 +73,7 @@ samples_n = [500, 200, 50, 100, 100]
 age_means = [50, 60, 30, 40, 20]
 age_vars = [3, 1.5, 5, 5, 1]
 los_means = [42, 21, 7, 365, 84]
-los_vars = [100, 28, 5, 1000, 100]
+los_vars = [150, 42, 7.5, 1500, 150]
 cf_means = [0.2, 0.5, 1.5, 0.035, 0.2]
 cf_vars = [0.2, 0.2, 0.1, 0.1, 0.2]
 corr_matxs = [[[1, 0.3, 0.3], [0.3, 1, -0.3], [0.3, -0.3, 1]],
@@ -112,5 +115,29 @@ def assign_entry_date(row, date_range):
 
 
 synthetic_patients["EntryDate"] = synthetic_patients.apply(assign_entry_date, axis=1, args=(date_range,))
+
+
+# Assign to either Long Stay, Senior or General ward.
+def assign_ward(row):
+    wards = ["General Ward", "Senior Ward", "Long Stay"]
+    if row["Age"] >= 65 and row["LoS"] >= 28:
+        ward = np.random.choice(wards, p=[0.1, 0.6, 0.3])
+    elif row["Age"] >= 65:
+        ward = np.random.choice(wards, p=[0.5, 0.5, 0])
+    elif row["LoS"] >= 56:
+        ward = np.random.choice(wards, p=[0.1, 0, 0.9])
+    else:
+        ward = "General Ward"
+    return ward
+
+
+# Calculate Discharge Dates and assign a ward.
+synthetic_patients["DischargeDate"] = synthetic_patients["EntryDate"] + pd.to_timedelta(synthetic_patients["LoS"],
+                                                                                        unit="D")
+synthetic_patients["Ward"] = synthetic_patients.apply(assign_ward, axis=1)
+
+# Hide "future" data.
+synthetic_patients.loc[synthetic_patients["DischargeDate"] > date_range[-1], "LoS"] = np.nan
+synthetic_patients.loc[synthetic_patients["DischargeDate"] > date_range[-1], "DischargeDate"] = np.nan
 
 synthetic_patients.to_csv("synthetic_patients.csv", index=False)

@@ -67,8 +67,7 @@ synthetic_samples = pd.DataFrame(scaler.inverse_transform(scaled_samples[transfo
 synthetic_samples.columns = transform_cols
 synthetic_samples = pd.concat([synthetic_samples, scaled_samples["Label"]], axis=1)
 
-# SECTION 2: Generating individual samples from a specified patient cluster.
-
+# SECTION 2: Retrieve the cluster parameters for a given dataset.
 
 # Retrieve sample distribution parameters (so it only has to be done once).
 def get_sample_parameters(kmeans, data):
@@ -92,4 +91,4 @@ target_cluster = np.random.choice(km.n_clusters, 1, p=props)[0]
 scaled_single = truncated_mv_normal(centres[target_cluster], covs[target_cluster], 1, scaled_bounds)
 synthetic_single = scaler.inverse_transform(scaled_single)
 
-# TODO: Add functionality to give additional weight to most recent n months by oversampling.
+
