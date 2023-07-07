@@ -5,38 +5,40 @@ import simpy
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import RobustScaler
-from get_model_parameters import get_cluster_parameters
-from get_model_parameters import get_referral_rate
-from get_model_parameters import truncated_mv_normal
+from get_model_parameters import *
+import matplotlib.pyplot as plt
 
 # TODO: Remove once testing is over.
 np.random.seed(42)
 
-# TODO: Check if we need to remove NaNs from LoS column before/after scaling
-#       (but keep them in the raw data for occupancy func).
 # Import data, format and scale.
 synthetic_patients = pd.read_csv("synthetic_patients.csv")
 transform_cols = ["Age", "LoS", "DailyContacts"]
 scaler = RobustScaler()
-scaled_data = pd.DataFrame(scaler.fit_transform(synthetic_patients[transform_cols]))
+scaled_data = pd.DataFrame(scaler.fit_transform(synthetic_patients.dropna()[transform_cols]))
 scaled_data.columns = transform_cols
 
 # Get model parameters
+for col in ["EntryDate", "DischargeDate"]:
+    synthetic_patients[col] = pd.to_datetime(synthetic_patients[col], format="%Y-%m-%d")
+historic_end_date = max(synthetic_patients["DischargeDate"].max(), synthetic_patients["EntryDate"].max())
 global_props, global_centres, global_covs = get_cluster_parameters(scaled_data, 3)
 global_entry_rate = get_referral_rate(synthetic_patients["EntryDate"])
 
 # Create the simulation environment
 env = simpy.Environment()
-ward1 = simpy.Resource(env, capacity=10)
+ward1 = simpy.Resource(env, capacity=25)
 ward2 = simpy.Resource(env, capacity=10)
-ward3 = simpy.Resource(env, capacity=5)
+ward3 = simpy.Resource(env, capacity=10)
 ward1.name = "General Ward"
 ward2.name = "Senior Ward"
 ward3.name = "Long Stay"
 # This vector indirectly acts as a priority.
 wards = [ward3, ward2, ward1]
 
-# TODO: Instantiate occupancy with existing patients.
+# Get historical data
+historical_occupancy = get_historical_occupancy(synthetic_patients, wards)
+
 # Dicts to track occupancy and queues.
 occupancy = {ward1.name: [],
              ward2.name: [],
@@ -64,29 +66,36 @@ global_ward_reqs_high = {ward1.name: [np.inf, np.inf, np.inf],
 # Define a patient.
 class Patient(object):
     # Instantiate a patient and generate characteristics if not supplied.
-    def __init__(self, env, id_num, cluster=None, characteristics=None):
+    def __init__(self, env, id_num, known_characteristics=None, known_ward=None):
         self.env = env
         self.id = id_num
-        if cluster is None:
-            self.cluster = np.random.choice(range(len(global_props)), 1, p=global_props)[0]
-        else:
-            self.cluster = cluster
-        if characteristics is None:
+        self.cluster = np.random.choice(range(len(global_props)), 1, p=global_props)[0]
+        # Allow existing patients to keep known characteristics.
+        if known_characteristics is None:
             self.patient_characteristics = truncated_mv_normal(scaler,
                                                                global_centres[self.cluster],
                                                                global_covs[self.cluster],
                                                                global_scaled_bounds)
         else:
-            self.patient_characteristics = characteristics
-        self.action = env.process(self.choose_service(env))
+            # Generate characteristics in line with what is known, and keep the known age.
+            new_characteristics = truncated_mv_normal(scaler,
+                                                      global_centres[self.cluster],
+                                                      global_covs[self.cluster],
+                                                      known_characteristics)
+            new_characteristics[0][0] = scaler.inverse_transform(known_characteristics.reshape(1, -1))[0][0]
+            self.patient_characteristics = new_characteristics
+        self.action = env.process(self.choose_service(env, known_ward))
 
     # Find possible services for this patient and accept first available space.
-    def choose_service(self, env):
-        suitable_wards = []
-        for ward in wards:
-            if np.all(np.greater_equal(self.patient_characteristics, global_ward_reqs_low[ward.name])) and np.all(
-                    np.less_equal(self.patient_characteristics, global_ward_reqs_high[ward.name])):
-                suitable_wards.append(ward)
+    def choose_service(self, env, known_ward=None):
+        if known_ward is None:
+            suitable_wards = []
+            for ward in wards:
+                if np.all(np.greater_equal(self.patient_characteristics, global_ward_reqs_low[ward.name])) and np.all(
+                        np.less_equal(self.patient_characteristics, global_ward_reqs_high[ward.name])):
+                    suitable_wards.append(ward)
+        else:
+             suitable_wards = [known_ward]
 
         # Find a free resource and send the patient there.
         reqs = [ward.request() for ward in suitable_wards]
@@ -126,13 +135,28 @@ class Patient(object):
         yield env.timeout(los)
         selected_ward.release(resource_req)
         # TODO: Allow for sequence of resources (i.e. move to next ward).
-        #       Update: Have added option to instantiate with known characteristics.
-        #       Follow-up stays can be instantiated as new patient with same ID.
 
-# TODO: Add a function to populate wards with existing patients, and generate a LoS for them when sim starts.
+
 # Referral process creates new patients at each time step and assigns them to an available ward.
-def daily_referrals(env):
+def daily_referrals(env, current_patients=None):
+
+    # Load in existing patients.
     id_start = 0
+    # Calculate their LoS to-date. This will be a lower bound for their total LoS.
+    current_patients = synthetic_patients.loc[synthetic_patients["DischargeDate"].isnull()].copy()
+    current_patients["LoS"] = (historic_end_date - current_patients["EntryDate"]).dt.days
+    for idx, row in current_patients.iterrows():
+        # Get and scale characteristics: Age, LoS, DailyContacts
+        known_characteristics = scaler.transform(np.array(row.values[0:3]).reshape(1, -1))
+        # Replace any NAs with global lower bounds.
+        known_characteristics[np.isnan(known_characteristics)] = global_scaled_bounds[np.isnan(known_characteristics)]
+        # Get Ward object.
+        known_ward = next((ward for ward in wards if ward.name == row.values[5]), None)
+        # Instantiate patients with known characteristics.
+        Patient(env, id_start, known_characteristics, known_ward)
+        id_start += 1
+
+    # Start forward sim.
     while True:
         # Generate number of new referrals for this time step (time step: 1 day)
         num_referrals = np.random.poisson(global_entry_rate)
@@ -143,9 +167,10 @@ def daily_referrals(env):
             id_start += 1
 
         # Record occupancies.
-        for ward in wards:
-            occupancy[ward.name].append((env.now, ward.count))
-            queue[ward.name].append((env.now, queue_count[ward.name]))
+        if env.now != 0:
+            for ward in wards:
+                occupancy[ward.name].append((env.now, ward.count))
+                queue[ward.name].append((env.now, queue_count[ward.name]))
         # Wait for the next time step
         yield env.timeout(1)
 
@@ -156,5 +181,30 @@ env.process(daily_referrals(env))
 # Run the simulation
 env.run(until=100)
 
-# TODO: Visualise occupancies and queues.
+# Convert model occupancy to dataframe in same format as historical occupancy.
+occupancy_dfs = {key: pd.DataFrame(value, columns=['Day', 'Occupancy']) for key, value in occupancy.items()}
+for key in occupancy_dfs:
+    occupancy_dfs[key]["Day"] = max(historical_occupancy["Long Stay"].index) + pd.to_timedelta(occupancy_dfs[key]["Day"], unit="D")
+    occupancy_dfs[key].set_index("Day", inplace=True)
+
+# Occupancy plots.
+fig, axs = plt.subplots(3, 1, figsize=(8, 10))
+for i, key in enumerate(historical_occupancy.keys()):
+    historic_df = historical_occupancy[key]
+    forecast_df = occupancy_dfs[key]
+    ax = axs[i]
+
+    ax.plot(historic_df.index, historic_df['Occupancy'], color='blue', label='Historic')
+    ax.plot(forecast_df.index, forecast_df['Occupancy'], color='red', label='Forecast')
+
+    ax.set_title(key)
+    ax.legend()
+
+plt.tight_layout()
+plt.show()
+
+# TODO: Queue plots.
+
+
 # TODO: Monte-carlo functionality: Export occupancies and queues, calculate ensemble results, add visualisations.
+

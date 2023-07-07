@@ -138,6 +138,7 @@ synthetic_patients["Ward"] = synthetic_patients.apply(assign_ward, axis=1)
 
 # Hide "future" data.
 synthetic_patients.loc[synthetic_patients["DischargeDate"] > date_range[-1], "LoS"] = np.nan
+synthetic_patients.loc[synthetic_patients["DischargeDate"] > date_range[-1], "DailyContacts"] = np.nan
 synthetic_patients.loc[synthetic_patients["DischargeDate"] > date_range[-1], "DischargeDate"] = np.nan
 
 synthetic_patients.to_csv("synthetic_patients.csv", index=False)
