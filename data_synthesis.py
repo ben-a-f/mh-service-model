@@ -5,10 +5,6 @@ import numpy as np
 import pandas as pd
 from scipy.stats import beta, norm, lognorm
 
-# TODO: Remove once testing is over.
-np.random.seed(42)
-
-
 # Generate correlated random samples from a beta and two lognormal distributions.
 # These are used to generate Age, Length of Stay (LoS) and Contact Frequency variables.
 def correlated_samples(age_mean, age_var, los_mean, los_var, cf_mean, cf_var, corr_matx, min_age, max_age, n_samples):

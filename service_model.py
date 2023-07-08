@@ -8,9 +8,6 @@ from sklearn.preprocessing import RobustScaler
 from get_model_parameters import *
 import matplotlib.pyplot as plt
 
-# TODO: Remove once testing is over.
-np.random.seed(42)
-
 # Import data, format and scale.
 synthetic_patients = pd.read_csv("synthetic_patients.csv")
 transform_cols = ["Age", "LoS", "DailyContacts"]
@@ -63,6 +60,7 @@ global_ward_reqs_high = {ward1.name: [np.inf, np.inf, np.inf],
                          ward3.name: [np.inf, np.inf, np.inf]}
 ##
 
+
 # Define a patient.
 class Patient(object):
     # Instantiate a patient and generate characteristics if not supplied.
@@ -95,7 +93,7 @@ class Patient(object):
                         np.less_equal(self.patient_characteristics, global_ward_reqs_high[ward.name])):
                     suitable_wards.append(ward)
         else:
-             suitable_wards = [known_ward]
+            suitable_wards = [known_ward]
 
         # Find a free resource and send the patient there.
         reqs = [ward.request() for ward in suitable_wards]
@@ -143,7 +141,6 @@ def daily_referrals(env, current_patients=None):
     # Load in existing patients.
     id_start = 0
     # Calculate their LoS to-date. This will be a lower bound for their total LoS.
-    current_patients = synthetic_patients.loc[synthetic_patients["DischargeDate"].isnull()].copy()
     current_patients["LoS"] = (historic_end_date - current_patients["EntryDate"]).dt.days
     for idx, row in current_patients.iterrows():
         # Get and scale characteristics: Age, LoS, DailyContacts
@@ -175,27 +172,36 @@ def daily_referrals(env, current_patients=None):
         yield env.timeout(1)
 
 
+# Get current patients.
+current_patients = synthetic_patients.loc[synthetic_patients["DischargeDate"].isnull()].copy()
 # Create an instance of the event process and start it
-env.process(daily_referrals(env))
+env.process(daily_referrals(env, current_patients))
 
 # Run the simulation
-env.run(until=100)
+env.run(until=1000)
 
 # Convert model occupancy to dataframe in same format as historical occupancy.
 occupancy_dfs = {key: pd.DataFrame(value, columns=['Day', 'Occupancy']) for key, value in occupancy.items()}
+queue_dfs = {key: pd.DataFrame(value, columns=['Day', 'Queue']) for key, value in queue.items()}
+
 for key in occupancy_dfs:
     occupancy_dfs[key]["Day"] = max(historical_occupancy["Long Stay"].index) + pd.to_timedelta(occupancy_dfs[key]["Day"], unit="D")
     occupancy_dfs[key].set_index("Day", inplace=True)
+
+    queue_dfs[key]["Day"] = max(historical_occupancy["Long Stay"].index) + pd.to_timedelta(queue_dfs[key]["Day"], unit="D")
+    queue_dfs[key].set_index("Day", inplace=True)
 
 # Occupancy plots.
 fig, axs = plt.subplots(3, 1, figsize=(8, 10))
 for i, key in enumerate(historical_occupancy.keys()):
     historic_df = historical_occupancy[key]
     forecast_df = occupancy_dfs[key]
+    queue_df = queue_dfs[key]
     ax = axs[i]
 
     ax.plot(historic_df.index, historic_df['Occupancy'], color='blue', label='Historic')
     ax.plot(forecast_df.index, forecast_df['Occupancy'], color='red', label='Forecast')
+    ax.plot(queue_df.index, queue_df['Queue'], color='green', label='Forecast')
 
     ax.set_title(key)
     ax.legend()
@@ -203,8 +209,6 @@ for i, key in enumerate(historical_occupancy.keys()):
 plt.tight_layout()
 plt.show()
 
-# TODO: Queue plots.
-
-
 # TODO: Monte-carlo functionality: Export occupancies and queues, calculate ensemble results, add visualisations.
 
+# TODO: Model is over-estimating either entry rate, LoS, or both. Consider regression-based model rather than cluster-based.
