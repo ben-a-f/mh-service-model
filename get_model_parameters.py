@@ -1,4 +1,4 @@
-# This script contains the functions needed to retrieve statistics from a dataset for the service model.
+# This script contains the functions needed for the service model.
 
 import pandas as pd
 import numpy as np

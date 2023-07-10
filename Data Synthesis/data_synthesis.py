@@ -137,4 +137,4 @@ synthetic_patients.loc[synthetic_patients["DischargeDate"] > date_range[-1], "Lo
 synthetic_patients.loc[synthetic_patients["DischargeDate"] > date_range[-1], "DailyContacts"] = np.nan
 synthetic_patients.loc[synthetic_patients["DischargeDate"] > date_range[-1], "DischargeDate"] = np.nan
 
-synthetic_patients.to_csv("synthetic_patients.csv", index=False)
+synthetic_patients.to_csv("../synthetic_patients.csv", index=False)
