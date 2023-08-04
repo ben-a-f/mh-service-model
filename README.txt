@@ -1,7 +1,7 @@
 ### Mental Health Service Model ###
 This project is a work-in-progress!
 
-The aim is to create a mental health service capacity-and-demand forecasting tool tht simulates patients with various characteristics occupying beds in a inpatient wards.
+The aim is to create an inpatient health service capacity-and-demand forecasting tool that simulates patients with various characteristics occupying beds in inpatient wards.
 
 There are three components to the project:
 - Data synthesis: Synthetic patient data will be created with various correlations and characteristics for testing purposes.
